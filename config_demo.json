@@ -1,0 +1,12 @@
+{
+    "OPENAI_API_KEY": "your api key here",
+    "TIGER_AI_GATEWAY_URL": "https://api.ai-gateway.tigeranalytics.com/v1",
+    "YML_INBOX_DIR": "./yml_inbox",
+    "OUTLOOK_FOLDER_NAME": "Inbox",
+    "MAX_EMAILS_TO_FETCH": 50,
+    "ACCOUNTS": [
+        {
+        "account_name": "Outlook_Live_Desk"
+        }
+    ]
+}
