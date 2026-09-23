@@ -1,5 +1,5 @@
 {
-    "OPENAI_API_KEY": "sk-BWR7pr6IajX_Ze0qNggjOQ",
+    "OPENAI_API_KEY": "add your API key here",
     "TIGER_AI_GATEWAY_URL": "https://api.ai-gateway.tigeranalytics.com/v1",
     "YML_INBOX_DIR": "./yml_inbox",
     "OUTLOOK_FOLDER_NAME": "Inbox",
