@@ -56,6 +56,33 @@ CHANGE SET v3 (applied on top of the integrated build)
 All four are in V3_SWEEP / the merge payload / EXT below, and all run inside
 transform_prototype(), so the reference mockup gets exactly the same look.
 
+COLLEAGUE CHANGES (app.py, 23 Sep 2026) — kept as delivered
+-----------------------------------------------------------
+-   Top bar / floating hamburger nav / content offset CSS (end of V3_CSS).
+-   Quotation Inbox columns re-ordered in the render wrapper (colOrder).
+
+CHANGE SET v4 (applied on top of the colleague's build)
+-------------------------------------------------------
+1.  Scenario Planner restored from prototype v3 as a Trade & Pricing tab,
+    after Rules & Guardrails: 148-row seeded history, R1/R3/R4 sliders,
+    elasticity k, before/after forecast, margin histograms. No dashboard.
+2.  "Propose rule change" creates a pending amendment per changed rule; Rules &
+    Guardrails shows it with Approve / Reject. Approving publishes the next
+    rule version live; both outcomes are written to the audit trail.
+3.  Quotation Inbox filter fixed: rows are matched per leg on the ID and Leg
+    seq # columns found by header after the reorder, so the filter and the
+    "Showing X of Y" count agree whatever the column order.
+4.  Nav menu: the old collapse arrow is gone and the menu button opens on
+    click / tap as well as hover.
+5.  Rules & Guardrails: "Confirm & hand to sales" is now "Confirm". It writes
+    the same audit entries but stays on the Rules screen; the user moves on to
+    the Scenario Planner or the Sales inbox themselves. Once confirmed the
+    button turns green and reads "Confirmed"; any later change to the rules,
+    guardrails or base rate brings "Confirm" back.
+
+All five are V4_CSS / V4_SWEEP / V4_EXT (plus the filter block in EXT), run inside
+transform_prototype().
+
 ================================================================================
 """
 
@@ -304,6 +331,615 @@ def apply_v3(html: str) -> str:
     for find, repl in V3_SWEEP:
         html = html.replace(find, repl, 1)
     return html.replace("</style>", V3_CSS + "</style>", 1)
+
+
+# ------------------------------------------------------------------------------
+# V4 change set — Scenario Planner in Trade & Pricing, rule-amendment approval,
+# nav menu tidy. Applied inside transform_prototype() (CSS in step 5c, JS in
+# step 6b), so the app and the reference mockup get exactly the same build.
+#
+# The planner, its 148-row seeded quotation history and the simulator are
+# ported from prototype v3 (pil-scenario4-v3.html, section 4 and step 8). The
+# history generator and simulate() are the v3 logic unchanged (only the
+# dashboard-only outputs are trimmed), so the figures match what v3 showed.
+# What changed on the way in:
+#   - it lives in Carol Tan's Trade & Pricing nav, after Rules & Guardrails,
+#     not under the retired Trade Director persona
+#   - no Analytics Dashboard: the "Back to the dashboard" button and the
+#     "same quotations the dashboard measures" copy are gone
+#   - copy sweep rules applied: no step language, no build-narrating popovers
+#     (plan-demo, plan-forecast dropped; plan-model, plan-filter, plan-dist kept)
+#   - every changed rule (R1, R3, R4) can be proposed, not only R1, and the
+#     proposal can now be approved or rejected on Rules & Guardrails
+#   - sliders update their label while dragging and re-run on release, instead
+#     of re-rendering mid-drag (which dropped the drag after one step)
+# ------------------------------------------------------------------------------
+
+V4_CSS = """
+/* v4 — nav menu: the old collapse arrow is gone, and the menu button opens on
+   click / tap as well as on hover, so it works on touchscreens */
+.sidenav .nav-toggle{display:none !important}
+#sidenav.nav-open{
+  width:220px !important; height:auto !important;
+  max-height:calc(100vh - 90px) !important;
+  box-shadow:0 8px 24px rgba(15, 23, 42, 0.2) !important;
+}
+#sidenav.nav-open::before{opacity:0 !important; pointer-events:none !important}
+/* while closed, the button itself takes the tap — not the item under it */
+#sidenav:not(:hover):not(.nav-open) > *{pointer-events:none}
+/* v4 — Rules & Guardrails: the confirmed state of the Confirm button */
+.btn.green.confirmed:disabled{opacity:1; cursor:default}
+"""
+
+# asserted string swaps on the prototype, applied with V4_CSS in step 5c
+V4_SWEEP = [
+    # Rules & Guardrails: confirming no longer hands over to Sales — the flow
+    # stops on the Rules screen and the user chooses where to go next
+    ("""      'Confirm &amp; hand to sales</button>' : '')) +""",
+     """      'Confirm</button>' : '')) +"""),
+]
+
+
+def apply_v4_sweep(html: str) -> str:
+    misses = [find.strip()[:70] for find, _ in V4_SWEEP if find not in html]
+    if misses:
+        raise RuntimeError("v4 sweep did not match: " + "; ".join(misses))
+    for find, repl in V4_SWEEP:
+        html = html.replace(find, repl, 1)
+    return html
+
+
+V4_EXT = r"""
+/* ==========================================================================
+   V4 — SCENARIO PLANNER (Trade & Pricing) + RULE AMENDMENT APPROVAL + NAV
+   ========================================================================== */
+
+/* ---- nav menu: always the full list, opens on click / tap too ---------- */
+S.navCollapsed = false; S.navUserSet = true;
+ACTIONS['nav-toggle'] = function(){};
+document.addEventListener('click', function(e){
+  var nav = document.getElementById('sidenav');
+  if (!nav) return;
+  if (!nav.contains(e.target)){ nav.classList.remove('nav-open'); return; }
+  if (e.target.closest('.nav-item')){ nav.classList.remove('nav-open'); return; }
+  nav.classList.toggle('nav-open');
+}, true);
+
+NAV.pricer = (function(items){
+  var out = [];
+  items.forEach(function(it){
+    out.push(it);
+    if (it.id === 'rules') out.push({ id:'planner', label:'Scenario Planner', icon:'sliders' });
+  });
+  return out;
+})(NAV.pricer);
+
+/* pending amendments show as a badge on Rules & Guardrails */
+var _v4RenderNav = renderNav;
+renderNav = function(){
+  _v4RenderNav();
+  var n = pendingProposals();
+  if (!n) return;
+  var item = document.querySelector('#sidenav .nav-item[data-screen="rules"]');
+  if (item && !item.querySelector('.nav-badge'))
+    item.insertAdjacentHTML('beforeend', '<span class="nav-badge" title="Pending rule amendments">' + n + '</span>');
+};
+
+/* ---- 1. QUOTATION HISTORY + SIMULATOR (ported verbatim from v3) --------
+   One seeded dataset of 148 quotations on LatAm West Coast lanes over the
+   last 90 days. A small LCG, seed 1022, makes the figures identical on every
+   open.                                                                   */
+function lcg(seed){
+  let s = seed >>> 0;
+  return function(){ s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return s / 4294967296; };
+}
+function gauss(r){
+  const u1 = Math.max(r(), 1e-9), u2 = r();
+  return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+}
+const HIST_LANES = ['LZC → GYE','MZT → GYE','GYE → MZT','LZC → CLL'];
+const HIST_BASES = [3800, 3900, 4000, 4100, 4200];
+const HIST_BASE_W = [0.10, 0.20, 0.40, 0.20, 0.10];
+const HIST_SEGS  = ['Tier 1 — Key Account','Tier 2 — Growth','Tier 3 — Transactional'];
+const HIST_N     = 148;
+
+const HISTORY = (function buildHistory(){
+  const r = lcg(1022), rows = [];
+  for (let i = 0; i < HIST_N; i++){
+    const day  = Math.floor(r() * (HIST_DAYS + 1));
+    const lane = HIST_LANES[Math.floor(r() * HIST_LANES.length)];
+    const us   = r(); const seg = us < 0.45 ? 0 : us < 0.80 ? 1 : 2;
+    const ub   = r(); let acc = 0, base = 4000;
+    for (let j = 0; j < HIST_BASES.length; j++){ acc += HIST_BASE_W[j]; if (ub < acc){ base = HIST_BASES[j]; break; } }
+    const n      = Math.min(25, 1 + Math.floor(Math.pow(r(), 1.92) * 25));
+    const util   = 72 + 27.5 * Math.pow(r(), 0.35);
+    const growth = -5 + r() * 40;
+    const mktPct = -1 + r() * 10;
+    const prior  = Math.floor(r() * 14);
+    const target = base * (1 - 0.005 + gauss(r) * 0.035);
+    const uAdopt = r(), uWin = r();
+    const slip   = -(0.005 + r() * 0.02);
+    rows.push({ i:i, day:day, date:addDays(HIST_FROM, day), lane:lane, seg:seg,
+                segment:HIST_SEGS[seg], base:base, n:n, util:util, growth:growth,
+                mktPct:mktPct, prior:prior, target:target,
+                adopted:(uAdopt < 0.835), uWin:uWin, slip:slip });
+  }
+  return rows;
+})();
+const HIST_CONTAINERS = HISTORY.reduce(function(a, r){ return a + r.n; }, 0);
+
+/* the same six rule conditions as the live engine, evaluated against each
+   historical row's own stored signal values. A rule set is {id: pctOfBase}. */
+function histFires(row, id, rs){
+  if (rs[id] == null) return false;
+  if (id === 'R1') return row.seg === 0;
+  if (id === 'R2') return row.growth > 20;
+  if (id === 'R3') return row.util > 95;
+  if (id === 'R4') return row.mktPct > 3;
+  if (id === 'R5') return row.util < 70;
+  if (id === 'R6') return row.prior === 0;
+  return false;
+}
+const RULE_IDS = ['R1','R2','R3','R4','R5','R6'];
+function histRecommended(row, rs){
+  let a = 0;
+  RULE_IDS.forEach(function(id){ if (histFires(row, id, rs)) a += rs[id]; });
+  return row.base * (1 + a / 100);
+}
+function winProb(rate, target, k){ return 1 / (1 + Math.exp(k * (rate - target) / target)); }
+
+/* the live rule set as % of base — a rule held in fixed USD is converted at
+   the live base rate */
+function liveRuleSet(){
+  const base = activeBaseRate() || 4000, rs = {};
+  S.rules.forEach(function(r){
+    rs[r.id] = r.mode === 'pct' ? r.pct : (r.usd / base * 100);
+  });
+  return rs;
+}
+function proposedRuleSet(){
+  const rs = liveRuleSet();
+  if (rs.R1 != null) rs.R1 = S.sim.r1;
+  if (rs.R3 != null) rs.R3 = S.sim.r3;
+  if (rs.R4 != null) rs.R4 = S.sim.r4;
+  return rs;
+}
+
+function simulate(rs, k, floorPct){
+  const cost = fullyLoadedCost();
+  const fr   = Math.ceil(cost / (1 - floorPct / 100));
+  let gross = 0, contrib = 0, wonRows = 0, wonCntr = 0, adopted = 0,
+      breach = 0, breachVal = 0, quoted = 0, quotedCntr = 0;
+  const margins = [];
+  HISTORY.forEach(function(row){
+    const rec  = histRecommended(row, rs);
+    const rate = row.adopted ? rec : rec * (1 + row.slip);
+    if (row.adopted) adopted++;
+    quotedCntr += row.n;
+    quoted     += rate * row.n;
+    const m = rate ? (rate - cost) / rate * 100 : 0;
+    margins.push(m);
+    if (m < floorPct){ breach++; breachVal += (fr - rate) * row.n; }
+    const won = row.uWin < winProb(rate, row.target, k);
+    if (won){
+      wonRows++; wonCntr += row.n;
+      gross += rate * row.n; contrib += (rate - cost) * row.n;
+    }
+  });
+  return {
+    rows: HIST_N, cost: cost, floorRate: fr, floorPct: floorPct,
+    quotedValue: quoted, quotedContainers: quotedCntr,
+    gross: gross, contrib: contrib, wonRows: wonRows, wonContainers: wonCntr,
+    adoption: adopted / HIST_N * 100,
+    winRate: wonRows / HIST_N * 100,
+    marginPct: gross ? contrib / gross * 100 : 0,
+    breach: breach, breachPct: breach / HIST_N * 100, breachValue: breachVal,
+    margins: margins
+  };
+}
+function liveSim(){ return simulate(liveRuleSet(), S.sim.k, S.governance.g1.threshold); }
+
+/* margin distribution, 2-point bands, shared bins so the two panels compare */
+function marginBins(margins, loEdge, hiEdge){
+  const bins = [];
+  for (let lo = loEdge; lo < hiEdge; lo += 2) bins.push({ lo:lo, hi:lo + 2, n:0 });
+  margins.forEach(function(m){
+    let idx = Math.floor((m - loEdge) / 2);
+    idx = clamp(idx, 0, bins.length - 1);
+    bins[idx].n++;
+  });
+  return bins;
+}
+
+/* ---- 2. STATE ----------------------------------------------------------- */
+S.sim = { r1:-3.0, r3:5.0, r4:2.5, k:28, ran:false, result:null, init:false };
+S.proposals = [];
+function pendingProposals(){ return S.proposals.filter(function(p){ return p.status === 'Pending approval'; }).length; }
+
+const SIM_RULES = [
+  { id:'R1', key:'r1', min:-8, max:0,  seed:-3.0 },
+  { id:'R3', key:'r3', min:0,  max:12, seed:5.0 },
+  { id:'R4', key:'r4', min:0,  max:8,  seed:2.5 }
+];
+function attachedRule(id){ return S.rules.filter(function(r){ return r.id === id; })[0] || null; }
+function ruleVersion(r){ return (r && r.version) || '1.0'; }
+function nextVersion(v){ var p = String(v).split('.'); return p[0] + '.' + ((parseInt(p[1] || '0', 10) || 0) + 1); }
+/* sliders start from the live rules the first time the planner opens, and
+   again after an amendment is approved */
+function syncSimToLive(){
+  const live = liveRuleSet();
+  SIM_RULES.forEach(function(s){ S.sim[s.key] = live[s.id] != null ? +live[s.id].toFixed(1) : s.seed; });
+  S.sim.init = true;
+}
+/* the rules whose planner value differs from the live one */
+function simChanges(){
+  const live = liveRuleSet();
+  return SIM_RULES.filter(function(s){
+    return live[s.id] != null && Math.abs(S.sim[s.key] - live[s.id]) > 0.049;
+  }).map(function(s){
+    const r = attachedRule(s.id);
+    return { id:s.id, name:libRule(s.id).name, from:live[s.id], to:S.sim[s.key],
+             fromV:ruleVersion(r), toV:nextVersion(ruleVersion(r)) };
+  });
+}
+
+/* ---- 3. INFO POPOVERS (product explanation only) ------------------------ */
+POPS['plan-model'] = { t: 'What sits behind the forecast',
+  b: 'The win-probability model is p = 1 / (1 + e^(k(rate−target)/target)), with k seeded at 28. At rate = target, ' +
+     'p = 0.5; four per cent above target gives roughly a one-in-four chance, four per cent below it roughly three in four. ' +
+     'k is an editable input, so the assumption behind the forecast stays visible. Changing it re-runs the forecast.' };
+POPS['plan-filter'] = { t: 'What is in the 90-day window',
+  b: HIST_N + ' quotations covering ' + n0(HIST_CONTAINERS) + ' containers on LZC → GYE and three adjacent LatAm West Coast ' +
+     'lanes, between ' + HIST_FROM_S + ' and ' + HIST_TO_S + '. Each row carries its own base rate, segment, container count ' +
+     'and the signal values that decided which rules fired, so re-pricing them under a changed rule set is a genuine re-run ' +
+     'rather than a percentage applied to a total.' };
+POPS['plan-dist'] = { t: 'What the two panels show',
+  b: 'Each bar counts quotations falling in a two-point net margin band. Bars left of the dashed line breach the margin ' +
+     'floor and route to Trade &amp; Pricing for approval. Read the two panels together: a steeper discount shifts the whole ' +
+     'distribution left, and the count below the floor is the extra approval workload it creates.' };
+
+/* ---- 4. THE SCREEN ------------------------------------------------------
+   (<b>, not <strong>, inside notice bodies: .notice strong is display:block) */
+SCREENS.planner = function(){
+  if (!engineReady()){
+    return pageHead('', 'Scenario Planner', '') +
+      notice('warn', 'Nothing to simulate yet',
+        'The planner re-prices the quotation history under a changed rule set. It needs a published price list, ' +
+        'STR-007 and its rules.') +
+      '<div class="card"><div class="card-bd"><div class="empty">' +
+      '<span class="ei">' + icon('sliders', 22) + '</span><h3>No rules to vary</h3>' +
+      '<p>Publish the price list, create the strategy and attach its rules first.</p>' +
+      '<div style="margin-top:14px"><button type="button" class="btn primary" data-act="nav" data-screen="rules">' +
+        'Go to Rules &amp; Guardrails</button></div>' +
+      '</div></div></div>';
+  }
+  if (!S.sim.init) syncSimToLive();
+
+  const base = liveSim();
+  const prop = S.sim.ran ? S.sim.result : null;
+  const live = liveRuleSet();
+  const cost = fullyLoadedCost();
+
+  const slider = function(s){
+    const v = S.sim[s.key], label = s.id + ' ' + libRule(s.id).name;
+    return '<div class="field" style="margin-bottom:14px">' +
+      '<label for="sim' + s.id + '">' + esc(label) + '</label>' +
+      '<div class="slider-row">' +
+        '<input type="range" id="sim' + s.id + '" min="' + s.min + '" max="' + s.max + '" step="0.5" value="' + v +
+          '" data-inp="sim-' + s.key + '" aria-label="' + esc(label) + '">' +
+        '<span class="slider-val">' + signedPct1(v) + '</span>' +
+      '</div>' +
+      '<div class="slider-scale"><span>' + signedPct1(s.min) + '</span><span>live ' + signedPct1(live[s.id]) +
+        '</span><span>' + signedPct1(s.max) + '</span></div>' +
+      '</div>';
+  };
+  const sliders = SIM_RULES.filter(function(s){ return live[s.id] != null; }).map(slider).join('');
+
+  const controls =
+    '<div class="card"><div class="card-hd"><h2>Rule parameters</h2>' +
+      '<span class="sub">Expressed as % of each quotation’s own base rate</span>' +
+      '<div class="card-hd-act">' + DEMO_TAG + info('plan-model', true) + '</div></div><div class="card-bd">' +
+      (sliders || '<div class="wrap-note">None of R1, R3 or R4 is attached to STR-007, so there is nothing to vary.</div>') +
+      '<div class="hr"></div>' +
+      '<div class="field" style="max-width:280px"><label for="simK">Win-probability elasticity k</label>' +
+        '<input type="number" id="simK" class="mono" value="' + S.sim.k + '" min="4" max="80" step="1" data-inp="sim-k" ' +
+        'aria-label="Win probability elasticity constant k">' +
+        '<span class="hint">p = 1 / (1 + e^(k(rate−target)/target)) · ' +
+        '<span class="tag-demo">' + icon('info', 10) + 'Demo elasticity assumption</span></span></div>' +
+      '<div class="btn-row" style="margin-top:14px">' +
+        '<button type="button" class="btn primary lg" data-act="run-sim">' + icon('bolt', 16) + 'Run simulation</button>' +
+        '<button type="button" class="btn" data-act="reset-sim">Reset to live</button>' +
+      '</div>' +
+    '</div></div>';
+
+  const filter =
+    '<div class="card"><div class="card-hd"><h2>Quotation history</h2>' +
+      '<span class="sub">The rows the simulation re-prices</span>' +
+      '<div class="card-hd-act">' + DEMO_TAG + info('plan-filter', true) + '</div></div><div class="card-bd">' +
+      '<dl class="dl">' +
+        '<dt>Window</dt><dd class="mono">' + esc(HIST_FROM_S) + ' – ' + esc(HIST_TO_S) + ' (last ' + HIST_DAYS + ' days)</dd>' +
+        '<dt>Lanes</dt><dd class="mono">' + HIST_LANES.map(esc).join(' · ') + '</dd>' +
+        '<dt>Quotations</dt><dd class="mono">' + HIST_N + '</dd>' +
+        '<dt>Containers</dt><dd class="mono">' + n0(HIST_CONTAINERS) + '</dd>' +
+        '<dt>Cost basis</dt><dd class="mono">' + usd(cost) + ' per container</dd>' +
+        '<dt>Margin floor</dt><dd class="mono">' + pct1(S.governance.g1.threshold) + '</dd>' +
+      '</dl></div></div>';
+
+  const changes = simChanges();
+  const pending = S.proposals.filter(function(p){ return p.status === 'Pending approval'; });
+
+  let results = '';
+  if (prop){
+    const dRev = prop.gross - base.gross, dContrib = prop.contrib - base.contrib;
+    const dMargin = prop.marginPct - base.marginPct, dWin = prop.winRate - base.winRate;
+    const dBreach = prop.breach - base.breach, dBreachVal = prop.breachValue - base.breachValue;
+
+    /* the same rule change applied to REQ-1022's own configuration */
+    const c = calculate(null);
+    const recNow = c.recommended;
+    let propRate = c.base;
+    S.rules.forEach(function(r){
+      const lib = libRule(r.id);
+      const ev = lib.evaluate(SIGNALS, { base:c.base, segment:heroCase().segment, crmId:heroCase().crmId,
+                                         priorQuotations:SIGNALS.conversion.num });
+      if (!ev.fired) return;
+      const pct = (r.id === 'R1') ? S.sim.r1 : (r.id === 'R3') ? S.sim.r3 : (r.id === 'R4') ? S.sim.r4
+                 : (r.mode === 'pct' ? r.pct : r.usd / c.base * 100);
+      propRate += c.base * pct / 100;
+    });
+    const mNow  = (recNow - cost) / recNow * 100;
+    const mProp = (propRate - cost) / propRate * 100;
+    const head  = Math.round((mProp - base.floorPct) * 100);
+    const moved = Math.round(propRate) !== Math.round(recNow);
+
+    const row = function(label, before, after, delta, good){
+      return '<tr><td>' + label + '</td><td class="num mono">' + before + '</td>' +
+        '<td class="num mono">' + after + '</td>' +
+        '<td class="num mono" style="color:' + (good === null ? 'var(--muted)' : good ? 'var(--green)' : 'var(--pil-red-dk)') + '; font-weight:700">' +
+        delta + '</td></tr>';
+    };
+    const lo = -6, hi = 24;
+    const binsA = marginBins(base.margins, lo, hi), binsB = marginBins(prop.margins, lo, hi);
+    const scaleMax = Math.max.apply(null, binsA.map(function(b){ return b.n; }).concat(binsB.map(function(b){ return b.n; })));
+
+    results =
+      '<div class="card"><div class="card-hd"><h2>Headline finding</h2></div><div class="card-bd">' +
+        notice(mProp >= base.floorPct ? 'warn' : 'error',
+          moved
+            ? 'On REQ-1022, the proposed rules move the recommendation from ' + usd(recNow) + ' to ' + usd(propRate)
+            : 'On REQ-1022, the recommendation stays at ' + usd(recNow),
+          'Net margin goes from <span class="mono">' + pct2(mNow) + '</span> to <span class="mono">' + pct2(mProp) +
+          '</span> — <b>' + Math.abs(head) + ' basis points</b> ' + (head >= 0 ? 'above' : 'below') + ' the ' +
+          pct1(base.floorPct) + ' floor.') +
+        notice(dBreach > 0 ? 'warn' : 'ok',
+          'Across the ' + HIST_N + '-quotation history',
+          'Win rate <span class="mono">' + signedPP(dWin) + '</span>, gross revenue <span class="mono">' + signedUsd(dRev) +
+          '</span> (' + signedPct1(base.gross ? dRev / base.gross * 100 : 0) + '), net margin <span class="mono">' +
+          signedPP(dMargin) + '</span>, and quotations breaching the floor go from <b>' + base.breach + ' to ' +
+          prop.breach + '</b> — <span class="mono">' + signed(dBreach) + '</span>, with the value at stake moving ' +
+          '<span class="mono">' + signedUsd(dBreachVal) + '</span> to ' + usd(prop.breachValue) + '.') +
+      '</div></div>' +
+
+      '<div class="card clip"><div class="card-hd"><h2>Forecast — before and after</h2>' +
+        '<span class="sub">' + HIST_N + ' quotations re-priced under the proposed rule set</span>' +
+        '<div class="card-hd-act">' + DEMO_TAG + '</div></div>' +
+        '<div class="card-bd tight"><div class="tbl-wrap" style="max-height:none"><table class="tbl"><thead><tr>' +
+        '<th>Measure</th><th class="num">Live rule set</th><th class="num">Proposed</th><th class="num">Delta</th>' +
+        '</tr></thead><tbody>' +
+        row('Gross revenue won', usd(base.gross), usd(prop.gross), signedUsd(dRev), dRev >= 0) +
+        row('Net contribution', usd(base.contrib), usd(prop.contrib), signedUsd(dContrib), dContrib >= 0) +
+        row('Net margin %', pct2(base.marginPct), pct2(prop.marginPct), signedPP(dMargin), dMargin >= 0) +
+        row('Win rate', pct2(base.winRate), pct2(prop.winRate), signedPP(dWin), dWin >= 0) +
+        row('Quotations won', String(base.wonRows), String(prop.wonRows), signed(prop.wonRows - base.wonRows), prop.wonRows >= base.wonRows) +
+        row('Containers won', n0(base.wonContainers), n0(prop.wonContainers), signed(prop.wonContainers - base.wonContainers), prop.wonContainers >= base.wonContainers) +
+        row('Breaching the ' + pct1(base.floorPct) + ' floor', String(base.breach), String(prop.breach), signed(dBreach), dBreach <= 0) +
+        row('Exception value at stake', usd(base.breachValue), usd(prop.breachValue), signedUsd(dBreachVal), dBreachVal <= 0) +
+        '</tbody></table></div></div></div>' +
+
+      '<div class="card"><div class="card-hd"><h2>Net margin distribution</h2>' +
+        '<span class="sub">All ' + HIST_N + ' quotations, live rule set vs proposed</span>' +
+        '<div class="card-hd-act">' + DEMO_TAG + info('plan-dist', true) + '</div></div><div class="card-bd">' +
+        '<div class="grid2">' +
+          '<div>' + histPanel({ width:420, bins:binsA, floor:base.floorPct, scaleMax:scaleMax,
+            label:'Live rule set — ' + base.breach + ' below the floor' }) + '</div>' +
+          '<div>' + histPanel({ width:420, bins:binsB, floor:base.floorPct, scaleMax:scaleMax,
+            label:'Proposed — ' + prop.breach + ' below the floor' }) + '</div>' +
+        '</div>' +
+        '<div class="chart-legend"><span><i style="background:var(--ch-1)"></i>At or above the ' + pct1(base.floorPct) + ' floor</span>' +
+          '<span><i style="background:var(--ch-4)"></i>Below the floor — routes to Trade &amp; Pricing</span></div>' +
+      '</div></div>';
+  } else {
+    results = '<div class="card"><div class="card-bd"><div class="empty">' +
+      '<span class="ei">' + icon('sliders', 22) + '</span><h3>No simulation run yet</h3>' +
+      '<p>Move a rule parameter and press <b>Run simulation</b>. The engine re-prices all ' + HIST_N +
+      ' historical quotations under the proposed rule set.</p></div></div></div>';
+  }
+
+  const changeList = function(list){
+    return '<ul class="small" style="margin:6px 0 12px 18px">' + list.map(function(x){
+      return '<li><b>' + esc(x.id) + ' ' + esc(x.name) + '</b> v' + esc(x.fromV) + ' → v' + esc(x.toV) +
+        ': <span class="mono">' + signedPct1(x.from) + '</span> → <span class="mono">' + signedPct1(x.to) + '</span> of base</li>';
+    }).join('') + '</ul>';
+  };
+
+  const propose =
+    '<div class="card"><div class="card-hd"><h2>Propose the rule change</h2>' +
+      '<div class="card-hd-act">' + (pending.length ? statusChip('Pending approval') : '') + '</div></div>' +
+      '<div class="card-bd">' +
+      (pending.length
+        ? notice('ok', 'Amendment routed for approval',
+            changeList(pending) +
+            '<b>The live rules are unchanged</b> and stay in force until the amendment is approved on Rules &amp; Guardrails.') +
+          '<div class="btn-row"><button type="button" class="btn" data-act="nav" data-screen="rules">' + icon('shield', 15) +
+            'Open Rules &amp; Guardrails</button></div>'
+        : changes.length
+          ? '<div class="wrap-note">Proposing creates a pending amendment on Rules &amp; Guardrails. ' +
+              'The live rules stay in force until it is approved.</div>' + changeList(changes) +
+            '<div class="btn-row"><button type="button" class="btn primary" data-act="propose-rule">' + icon('check', 15) +
+              'Propose rule change</button></div>'
+          : '<div class="wrap-note" style="margin-bottom:10px">The parameters match the live rules. Move a slider to propose a change.</div>' +
+            '<div class="btn-row"><button type="button" class="btn primary" disabled>' + icon('check', 15) +
+              'Propose rule change</button></div>') +
+    '</div></div>';
+
+  return pageHead('', 'Scenario Planner',
+    'What-if re-pricing of ' + HIST_N + ' historical quotations · ' + esc(HIST_FROM_S) + ' – ' + esc(HIST_TO_S)) +
+    '<div class="grid2">' + controls + filter + '</div>' + results + propose;
+};
+
+/* ---- 5. RULES & GUARDRAILS: pending amendments with Approve / Reject ---- */
+var _v4Rules = SCREENS.rules;
+SCREENS.rules = function(){
+  var out = _v4Rules();
+  if (!S.str007) return out;
+  var pend = [];
+  S.proposals.forEach(function(p, i){ if (p.status === 'Pending approval') pend.push({ p:p, i:i }); });
+  if (!pend.length) return out;
+  var card =
+    '<div class="card"><div class="card-hd"><h2>Pending rule amendments</h2>' +
+      '<span class="sub">' + pend.length + ' awaiting approval</span>' +
+      '<div class="card-hd-act">' + statusChip('Pending approval') + '</div></div><div class="card-bd">' +
+      pend.map(function(x){
+        var p = x.p;
+        return notice('warn', esc(p.id) + ' ' + esc(p.name) + ' · v' + esc(p.fromV) + ' → v' + esc(p.toV),
+            'Proposed by <b>' + esc(p.by) + '</b> at <span class="mono">' + esc(p.at) + '</span> from the ' +
+            'Scenario Planner: <span class="mono">' + signedPct1(p.from) + '</span> → <span class="mono">' +
+            signedPct1(p.to) + '</span> of base. <b>The live rule below is unchanged</b> until this is approved.') +
+          '<div class="btn-row" style="margin:-2px 0 14px">' +
+            '<button type="button" class="btn primary sm" data-act="prop-approve" data-i="' + x.i + '">' + icon('check', 14) + 'Approve</button>' +
+            '<button type="button" class="btn sm" data-act="prop-reject" data-i="' + x.i + '">' + icon('x', 14) + 'Reject</button>' +
+          '</div>';
+      }).join('') +
+    '</div></div>';
+  var anchor = '<div class="card clip"><div class="card-hd"><h2>Rules on STR-007</h2>';
+  return out.indexOf(anchor) >= 0 ? out.replace(anchor, card + anchor) : out + card;
+};
+
+/* ---- 6. ACTIONS --------------------------------------------------------- */
+ACTIONS['run-sim'] = function(){
+  S.sim.result = simulate(proposedRuleSet(), S.sim.k, S.governance.g1.threshold);
+  S.sim.ran = true;
+  const b = liveSim(), p = S.sim.result;
+  audit('Simulation', 'STR-007', 'What-if run over ' + HIST_N + ' quotations (' + HIST_FROM_S + ' – ' + HIST_TO_S +
+    ', ' + n0(HIST_CONTAINERS) + ' containers) with R1 at ' + signedPct1(S.sim.r1) + ', R3 ' + signedPct1(S.sim.r3) +
+    ', R4 ' + signedPct1(S.sim.r4) + ', elasticity k=' + S.sim.k + '. Win rate ' + pct2(b.winRate) + ' → ' +
+    pct2(p.winRate) + ', gross revenue ' + usd(b.gross) + ' → ' + usd(p.gross) + ', net margin ' +
+    pct2(b.marginPct) + ' → ' + pct2(p.marginPct) + ', floor breaches ' + b.breach + ' → ' + p.breach + '.', 'pricer');
+  toast('Simulation run — win rate ' + signedPP(p.winRate - b.winRate) + ', net margin ' +
+    signedPP(p.marginPct - b.marginPct) + ', breaches ' + signed(p.breach - b.breach) + '.', 'ok');
+  render();
+};
+ACTIONS['reset-sim'] = function(){
+  syncSimToLive();
+  S.sim.k = 28; S.sim.ran = false; S.sim.result = null;
+  render();
+};
+ACTIONS['propose-rule'] = function(){
+  if (pendingProposals()){ toast('An amendment is already awaiting approval.', 'warn'); return; }
+  const changes = simChanges();
+  if (!changes.length){ toast('The parameters match the live rules — nothing to propose.', 'warn'); return; }
+  const at = stamp();
+  changes.forEach(function(x){
+    S.proposals.push({ id:x.id, name:x.name, from:x.from, to:x.to, fromV:x.fromV, toV:x.toV,
+      by:PERSONAS.pricer.name, at:at, status:'Pending approval' });
+    audit('Rule amendment', x.id, 'Amendment proposed: ' + x.name + ' ' + signedPct1(x.from) + ' → ' + signedPct1(x.to) +
+      ' of base (v' + x.fromV + ' → v' + x.toV + ' proposed), routed for approval. The live rule stays in force until it is approved.', 'pricer');
+  });
+  toast(changes.length + ' amendment' + (changes.length > 1 ? 's' : '') + ' proposed — pending on Rules & Guardrails.', 'ok');
+  render();
+};
+ACTIONS['prop-approve'] = function(d){
+  const p = S.proposals[+d.i];
+  if (!p || p.status !== 'Pending approval') return;
+  const r = attachedRule(p.id), base = activeBaseRate();
+  if (!r){
+    p.status = 'Withdrawn';
+    toast(p.id + ' is no longer attached to STR-007 — the amendment was withdrawn.', 'warn');
+    render(); return;
+  }
+  if (r.mode === 'pct') r.pct = p.to; else r.usd = Math.round(base * p.to / 100);
+  r.version = p.toV;
+  p.status = 'Approved'; p.decided = stamp();
+  audit('Rule amendment', p.id, 'Amendment approved: ' + p.name + ' v' + p.fromV + ' → v' + p.toV + ', ' +
+    signedPct1(p.from) + ' → ' + signedPct1(p.to) + ' of base. Now live at ' + ruleAdjLabel(r, base) + '.', 'pricer');
+  S.sim.init = false; S.sim.ran = false; S.sim.result = null;
+  toast(p.id + ' v' + p.toV + ' is live at ' + ruleAdjLabel(r, base) + '.', 'ok');
+  render();
+};
+ACTIONS['prop-reject'] = function(d){
+  const p = S.proposals[+d.i];
+  if (!p || p.status !== 'Pending approval') return;
+  p.status = 'Rejected'; p.decided = stamp();
+  audit('Rule amendment', p.id, 'Amendment rejected: ' + p.name + ' ' + signedPct1(p.from) + ' → ' + signedPct1(p.to) +
+    ' of base (v' + p.toV + ' not published). The live rule is unchanged at v' + p.fromV + '.', 'pricer');
+  toast(p.id + ' amendment rejected — the live rule is unchanged.', 'warn');
+  render();
+};
+
+/* Confirm on Rules & Guardrails: same audit entries as before, but the flow
+   stops here — no persona switch, no jump to the inbox. From here the user
+   goes to the Scenario Planner or the Sales inbox as they choose. */
+ACTIONS['confirm-rules'] = function(){
+  markStep(3);
+  const cost = fullyLoadedCost(), g = S.governance;
+  audit('Governance', 'G1', 'Margin floor confirmed ' + (g.g1.on ? 'ON at ' + pct1(g.g1.threshold) : 'OFF') +
+    ' for the STR-007 scope. Minimum acceptable rate ' +
+    (g.g1.on ? usd(Math.ceil(cost / (1 - g.g1.threshold / 100))) : 'n/a') +
+    ' against the ' + usd(cost) + ' fully-loaded cost basis.', 'pricer');
+  audit('Governance', 'G4', 'Free time variance guardrail confirmed ' + (g.g4.on ? 'ON' : 'OFF') +
+    ' at a ' + g.g4.laneStandard + ' / ' + g.g4.laneStandard + ' lane standard.', 'pricer');
+  S.rulesConfirmedSig = rulesConfigSig();
+  toast('Rules and guardrails confirmed for STR-007.', 'ok');
+  render();
+};
+
+/* The button turns green and reads "Confirmed" once confirmed. It is compared
+   against a fingerprint of the configuration, so any later change — a rule
+   value, a rule added or removed, a guardrail, an approved amendment, a new
+   base rate — brings the Confirm button back instead of leaving a stale
+   "Confirmed" on screen. */
+S.rulesConfirmedSig = null;
+function rulesConfigSig(){
+  return JSON.stringify({
+    base:  activeBaseRate(),
+    str:   S.str007 ? S.str007.priority : null,
+    rules: S.rules.map(function(r){ return [r.id, r.mode, r.usd, r.pct, r.priority]; }),
+    gov:   S.governance
+  });
+}
+function rulesConfirmed(){ return !!S.rulesConfirmedSig && S.rulesConfirmedSig === rulesConfigSig(); }
+
+var _v4RulesConfirm = SCREENS.rules;
+SCREENS.rules = function(){
+  var out = _v4RulesConfirm();
+  if (!rulesConfirmed()) return out;
+  return out.replace(/<button type="button" class="btn primary" data-act="confirm-rules">[\s\S]*?<\/button>/,
+    '<button type="button" class="btn green confirmed" disabled title="Confirmed — change a rule or guardrail to confirm again">' +
+    icon('check', 15) + 'Confirmed</button>');
+};
+
+/* sliders: the label follows the drag, the screen re-renders on release
+   (re-rendering mid-drag would replace the input and drop the drag) */
+document.addEventListener('input', function(e){
+  var el = e.target.closest && e.target.closest('[data-inp^="sim-r"]');
+  if (!el) return;
+  var v = parseFloat(el.value);
+  if (isNaN(v)) return;
+  S.sim[el.getAttribute('data-inp').slice(4)] = v;
+  var lab = el.parentNode.querySelector('.slider-val');
+  if (lab) lab.textContent = signedPct1(v);
+});
+document.addEventListener('change', function(e){
+  var el = e.target.closest && e.target.closest('[data-inp^="sim-"]');
+  if (!el) return;
+  var kind = el.getAttribute('data-inp'), v = parseFloat(el.value);
+  if (isNaN(v)) return;
+  if (kind === 'sim-k'){ if (v < 1) return; S.sim.k = v; }
+  else S.sim[kind.slice(4)] = v;
+  if (S.sim.ran) S.sim.result = simulate(proposedRuleSet(), S.sim.k, S.governance.g1.threshold);
+  render();
+});
+"""
 
 
 
@@ -1636,22 +2272,25 @@ render = function(){
     table.dataset.reordered = JSON.stringify(colOrder);
   }
 
-  // 3. Filter hidden rows based on search / dropdown filters
+  // 3. Filter rows (v4 fix). Each leg is judged on its own. The ID and Leg
+  //    seq # columns are found by their header AFTER the reorder above, so
+  //    the filter keeps working whatever colOrder is set to.
   var keep = {};
   inboxRows().forEach(function(c){ keep[c.id + '|' + c.leg] = 1; });
-  $$('#content table.tbl tbody tr').forEach(function(tr){
-    // Read original ID (cell 0) and LEG (cell 1) before or after reorder
-    var idCell = tr.querySelector('a[data-act="open-case"]');
-    var id = idCell ? idCell.innerText.trim() : (tr.cells[0] ? tr.cells[0].innerText.trim() : '');
-    
-    // Find leg cell by matching text pattern
-    var leg = tr.cells[1] ? tr.cells[1].innerText.trim() : '';
-    
-    if (id && !keep[id + '|' + leg] && !keep[id + '|1']) {
-      tr.style.display = 'none';
-    } else {
-      tr.style.display = '';
-    }
+  $$('#content table.tbl').forEach(function(tbl){
+    var heads = Array.from(tbl.querySelectorAll('thead th')).map(function(th){
+      return (th.textContent || '').trim().toLowerCase();
+    });
+    var idCol  = heads.indexOf('id');
+    var legCol = heads.findIndex(function(h){ return h.indexOf('leg seq') === 0; });
+    if (idCol < 0 || legCol < 0) return;          // not the inbox table
+    tbl.querySelectorAll('tbody tr').forEach(function(tr){
+      var idCell = tr.cells[idCol], legCell = tr.cells[legCol];
+      if (!idCell || !legCell) return;           // e.g. an empty-state row
+      var btn = idCell.querySelector('[data-act="open-case"]');
+      var id  = btn ? btn.getAttribute('data-id') : idCell.textContent.trim();
+      tr.style.display = keep[id + '|' + legCell.textContent.trim()] ? '' : 'none';
+    });
   });
 };
 
@@ -1826,14 +2465,21 @@ def transform_prototype(source: str, cases: list[dict], audit_rows: list[dict],
     html = apply_v3(html)
     notes.append("v3 change set applied (%d swaps + CSS)" % len(V3_SWEEP))
 
+    # 5c. v4 change set — nav menu tidy (CSS lands after the v3 CSS)
+    html = html.replace("</style>", V4_CSS + "</style>", 1)
+    html = apply_v4_sweep(html)
+    notes.append("v4 nav CSS + %d swap applied" % len(V4_SWEEP))
+
     # 6. the extension block, immediately before the prototype's own boot
     if BOOT_ANCHOR not in html:
         raise RuntimeError("prototype boot anchor not found — cannot append the extension block")
     ext = EXT.replace("__DROP_POPS__", json.dumps(copy_sweep.DROP_POPOVERS))
-    html = html.replace(BOOT_ANCHOR, ext + "\n" + BOOT_ANCHOR, 1)
+    # 6b. v4 — Scenario Planner, rule-amendment approval, nav behaviour
+    html = html.replace(BOOT_ANCHOR, ext + "\n" + V4_EXT + "\n" + BOOT_ANCHOR, 1)
     notes.append("%d narrating popovers dropped, %d product popovers kept"
                  % (len(copy_sweep.DROP_POPOVERS), len(copy_sweep.KEEP_POPOVERS)))
     notes.append("extension block appended (nav, inbox controls, 2 new screens, actions)")
+    notes.append("v4 block appended (Scenario Planner, amendment approval, nav click/tap)")
 
     return html, notes
 
