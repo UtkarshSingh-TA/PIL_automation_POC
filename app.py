@@ -41,6 +41,21 @@ new_app.py.bak and must stay that way:
     inspect.signature(agent.process_and_save)
     agent.process_and_save(email_payload, agent.request_seq_counter)
 
+CHANGE SET v3 (applied on top of the integrated build)
+------------------------------------------------------
+1.  "Client data" tag renamed to "PIL data" everywhere, restyled in PIL red.
+2.  Quotation Inbox: the derived Readiness column and the action column after
+    it are gone; every column now comes straight from the ingested workbook.
+    Cases open from the ID link.
+3.  Quotation Inbox: System proposed rate column tinted blue (header + cells),
+    and both rate columns read as dollars ($780, $2,600).
+4.  Live merge: the inbox stays workbook-only, but the workbook's REQ-1022 row
+    is re-tagged as the case wired to the pricing engine (CRM ID and segment
+    from the prototype), so the case workspace and quotation flow open again.
+
+All four are in V3_SWEEP / the merge payload / EXT below, and all run inside
+transform_prototype(), so the reference mockup gets exactly the same look.
+
 ================================================================================
 """
 
@@ -57,12 +72,12 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 # --- protected modules: imported, never edited --------------------------------
-from main_processing import (
+from new_main import (
     SequenceSourcingAgent,
     ExcelSequenceRenderer,
     load_config,
 )
-from email_extractor import fetch_extracted_email_payloads
+from new_email_extractor import fetch_extracted_email_payloads
 
 # ==============================================================================
 # copy_sweep — inlined verbatim so this file has no local imports.
@@ -140,11 +155,12 @@ DROP_POPOVERS = [
     "pl-missing", "wiz-optional", "pld-audit", "str-name", "rul-dollars", "rul-floor",
     "rul-derived", "inb-rows", "case-email", "case-sysassigned", "case-commodity",
     "case-openitems", "a6-email", "b6-4000", "b6-guardrails",
+    "inb-1039",
 ]
 
 KEEP_POPOVERS = [
     "pld-amend", "str-priority", "str-weights", "rul-unattached", "rul-cost",
-    "inb-1039", "case-signals", "case-waterfall", "case-measures",
+    "case-signals", "case-waterfall", "case-measures",
     "a6-concession", "a6-summary", "b6-queue",
 ]
 
@@ -164,6 +180,130 @@ class copy_sweep:  # noqa: N801 — a namespace, so every call site reads unchan
     DROP_POPOVERS = DROP_POPOVERS
     KEEP_POPOVERS = KEEP_POPOVERS
     apply = staticmethod(apply)
+
+
+
+# ------------------------------------------------------------------------------
+# V3 change set — asserted string swaps on the prototype, applied inside
+# transform_prototype() so the app and the reference mockup can never drift.
+# ------------------------------------------------------------------------------
+
+V3_SWEEP = [
+    # ---- 1. "Client data" -> "PIL data" (CLIENT_TAG is the only place it is
+    #         spelt; every screen that shows the tag uses this constant)
+    ("""const CLIENT_TAG = '<span class="tag-client">' + icon('ok', 10) + 'Client data</span>';""",
+     """const CLIENT_TAG = '<span class="tag-client">' + icon('ok', 10) + 'PIL data</span>';"""),
+
+    # ---- 2. Inbox: drop the derived Readiness column and the action column
+    ("""      '<th>Missing data</th><th>Readiness <span style="text-transform:none; letter-spacing:0">(derived)</span></th><th></th>' +""",
+     """      '<th>Missing data</th>' +"""),
+
+    ("""      '<td class="xsmall">' + esc(c.missing) + '</td>' +
+      '<td>' + statusChip(rd.label) + '</td>' +
+      '<td>' + (rd.ok
+        ? '<button type="button" class="btn sm' + (c.hero ? ' primary' : '') + '" data-act="open-case" data-id="' + c.id + '">Open</button>'
+        : '<button type="button" class="btn sm" disabled title="' + esc(rd.why) + '">Calculate Rate</button>' +
+          '<span class="tbl-sub">' + esc(rd.why) + '</span>') + '</td>' +
+    '</tr>';""",
+     """      '<td class="xsmall">' + esc(c.missing) + '</td>' +
+    '</tr>';"""),
+
+    ("""  const rows = S.cases.map(function(c){
+    const rd = readiness(c);
+""",
+     """  const rows = S.cases.map(function(c){
+"""),
+
+    #      the popover that explained the (now removed) readiness verdict
+    ("""CLIENT_TAG + info('inb-rows', true) + info('inb-1039', true) + '</div></div>' +""",
+     """CLIENT_TAG + info('inb-rows', true) + '</div></div>' +"""),
+
+    # ---- 3. Inbox: tinted System proposed rate column, dollar amounts
+    ("""<th class="num">System proposed rate</th>""",
+     """<th class="num col-sys">System proposed rate</th>"""),
+
+    ("""      '<td class="num mono">' + (c.proposed ? money(c.proposed) : '<span class="muted">—</span>') + '</td>' +""",
+     """      '<td class="num mono col-sys">' + (c.proposed ? '$' + money(c.proposed) : '<span class="muted">—</span>') + '</td>' +"""),
+
+    ("""      '<td class="num mono">' + (c.requested ? money(c.requested) : '<span class="muted">—</span>') + '</td>' +""",
+     """      '<td class="num mono">' + (c.requested ? '$' + money(c.requested) : '<span class="muted">—</span>') + '</td>' +"""),
+]
+
+V3_CSS = """
+/* v3 — PIL data tag in PIL red */
+.tag-client{color:var(--pil-red); background:#FDECEB; border-color:var(--pil-red)}
+/* v3 — System proposed rate column, as in the original Lovable inbox */
+table.tbl thead th.col-sys{background:#DDF0FA; color:#0B4F8A}
+table.tbl tbody td.col-sys{background:#F0F8FD; color:var(--navy); font-weight:600}
+
+/* Keep Top Header / Branding Stays Fixed on Top */
+#head, header, .app-header, .top-bar {
+  position: relative !important;
+  z-index: 10000 !important;
+}
+
+/* Button-Sized Floating Navigation Drawer */
+#nav, nav, .sidebar, .nav-panel {
+  position: fixed !important;
+  left: 12px !important;
+  top: 72px !important;              /* Positioned below blue header bar */
+  width: 42px !important;             /* Small button width when idle */
+  height: 42px !important;            /* Small button height when idle */
+  bottom: auto !important;
+  z-index: 9999 !important;
+  overflow: hidden !important;
+  background: #FFFFFF !important;
+  border: 1px solid #CBD5E1 !important;
+  border-radius: 8px !important;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.12) !important;
+  transition: width 0.25s ease, height 0.25s ease, box-shadow 0.25s ease !important;
+}
+
+/* Draw 3-line Hamburger Icon on top of the minimized button */
+#nav::before, nav::before, .sidebar::before, .nav-panel::before {
+  content: "" !important;
+  position: absolute !important;
+  top: 13px !important;
+  left: 11px !important;
+  width: 18px !important;
+  height: 2px !important;
+  background: #1E293B !important;     /* Top line */
+  box-shadow: 0 6px 0 #1E293B, 0 12px 0 #1E293B !important; /* Middle & Bottom lines */
+  z-index: 10000 !important;
+  opacity: 1 !important;
+  transition: opacity 0.15s ease !important;
+}
+
+/* Hide the 3-line Hamburger Icon when hovered/expanded */
+#nav:hover::before, nav:hover::before, .sidebar:hover::before, .nav-panel:hover::before {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* Expand into a Floating Menu Card on Hover */
+#nav:hover, nav:hover, .sidebar:hover, .nav-panel:hover {
+  width: 220px !important;            /* Expanded menu width */
+  height: auto !important;           /* Fits items vertically */
+  max-height: calc(100vh - 90px) !important;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.2) !important;
+}
+
+/* Push All Content Right so Nothing Overlaps the Button */
+#main, #content, .workspace, .app-body, .page-hd, .page-title {
+  margin-left: 56px !important;       /* Starts beside the button column */
+  width: calc(100% - 56px) !important;
+  max-width: calc(100% - 56px) !important;
+}
+"""
+
+
+def apply_v3(html: str) -> str:
+    misses = [find.strip()[:70] for find, _ in V3_SWEEP if find not in html]
+    if misses:
+        raise RuntimeError("v3 sweep did not match: " + "; ".join(misses))
+    for find, repl in V3_SWEEP:
+        html = html.replace(find, repl, 1)
+    return html.replace("</style>", V3_CSS + "</style>", 1)
 
 
 
@@ -1138,7 +1278,7 @@ html, body, .stApp{ background:#EFF3F8; overflow:hidden; }
 
 /* the workspace fills the viewport; the prototype scrolls inside it */
 iframe[data-testid="stIFrame"]{
-  height:100vh !important; min-height:100vh !important; width:100% !important;
+  height:100vh !important; min-height:100vh !important; width:100% !important; max-width:100% !important;
   border:0 !important; display:block;
 }
 
@@ -1382,6 +1522,10 @@ EXT = r"""
 /* the guided demo is gone: keep the rail permanently closed */
 S.railOpen = false; S.railUserSet = true;
 
+/* the pricer screens read heroCase() unconditionally; if a workbook has no
+   REQ-1022 the inbox stays workbook-only and they fall back to the seed */
+heroCase = function(){ return getCase('REQ-1022') || window.__PIL_HERO_SEED; };
+
 /* drop the popovers that narrate the build rather than explain the product */
 __DROP_POPS__.forEach(function(k){ delete POPS[k]; });
 
@@ -1442,17 +1586,72 @@ function inboxRows(){
   });
 }
 
-/* the original inbox maps over S.cases; filter by hiding non-matching rows */
+/* Re-order columns dynamically in Quotation Inbox & filter non-matching rows */
 const _renderOrig = render;
 render = function(){
   _renderOrig();
   if (S.screen !== 'inbox') return;
+
+  /* 
+    DEFAULT COLUMN INDEX MAP (0-indexed):
+    0: ID
+    1: LEG SEQ #
+    2: CUSTOMER
+    3: POL ➔ POD
+    4: VALIDITY
+    5: CONTAINER
+    6: WT (T)
+    7: COMMODITY
+    8: # CNTR
+    9: SERVICE / VOYAGE
+    10: SYSTEM PROPOSED RATE
+    11: CUSTOMER REQUESTED RATE
+    12: FLAGS
+    13: VAS
+    14: FREE TIME
+    15: REMARKS
+    16: STATUS
+    17: Completion%
+    18: Missing data
+
+    Rearrange the array below into your desired column order:
+  */
+  var colOrder = [0, 16, 1, 2, 3, 5, 7, 8, 6, 14, 4, 9, 10, 11, 12, 13, 15, 17, 18];
+
+  var table = document.querySelector('#content table.tbl');
+  if (table && table.dataset.reordered !== JSON.stringify(colOrder)) {
+    // 1. Reorder Header (<thead>)
+    var headerRow = table.querySelector('thead tr');
+    if (headerRow) {
+      var ths = Array.from(headerRow.children);
+      headerRow.innerHTML = '';
+      colOrder.forEach(function(i){ if (ths[i]) headerRow.appendChild(ths[i]); });
+    }
+    // 2. Reorder Data Rows (<tbody>)
+    table.querySelectorAll('tbody tr').forEach(function(tr){
+      var tds = Array.from(tr.children);
+      tr.innerHTML = '';
+      colOrder.forEach(function(i){ if (tds[i]) tr.appendChild(tds[i]); });
+    });
+    table.dataset.reordered = JSON.stringify(colOrder);
+  }
+
+  // 3. Filter hidden rows based on search / dropdown filters
   var keep = {};
   inboxRows().forEach(function(c){ keep[c.id + '|' + c.leg] = 1; });
   $$('#content table.tbl tbody tr').forEach(function(tr){
-    var id  = tr.cells[0] ? tr.cells[0].innerText.trim() : '';
+    // Read original ID (cell 0) and LEG (cell 1) before or after reorder
+    var idCell = tr.querySelector('a[data-act="open-case"]');
+    var id = idCell ? idCell.innerText.trim() : (tr.cells[0] ? tr.cells[0].innerText.trim() : '');
+    
+    // Find leg cell by matching text pattern
     var leg = tr.cells[1] ? tr.cells[1].innerText.trim() : '';
-    if (!keep[id + '|' + leg]) tr.style.display = 'none';
+    
+    if (id && !keep[id + '|' + leg] && !keep[id + '|1']) {
+      tr.style.display = 'none';
+    } else {
+      tr.style.display = '';
+    }
   });
 };
 
@@ -1580,8 +1779,17 @@ def transform_prototype(source: str, cases: list[dict], audit_rows: list[dict],
         "window.__PIL_WORKBOOK = " + js(workbook_label) + ";\n"
         "window.__PIL_MERGE = function (CASES) {\n"
         "  var live = window.__PIL_LIVE_CASES || [];\n"
+        "  var seed = null; for (var i=0;i<CASES.length;i++){ if(CASES[i].hero){seed=CASES[i];break;} }\n"
+        "  window.__PIL_HERO_SEED = seed;\n"
         "  if (!live.length) return [];\n"
-        "  return live;\n"
+        "  /* rows stay the workbook's own; the first REQ-1022 leg is re-tagged as\n"
+        "     the case wired to the pricing engine and borrows its CRM fields */\n"
+        "  var tagged = false;\n"
+        "  return live.map(function (c) {\n"
+        "    if (!seed || tagged || c.id !== seed.id) return c;\n"
+        "    tagged = true;\n"
+        "    return Object.assign({}, c, { hero: true, crmId: seed.crmId, segment: seed.segment });\n"
+        "  });\n"
         "};\n"
         "</script>\n"
     )
@@ -1613,6 +1821,10 @@ def transform_prototype(source: str, cases: list[dict], audit_rows: list[dict],
     if misses:
         raise RuntimeError("copy sweep did not match: " + "; ".join(misses))
     notes.append("copy sweep applied (%d replacements)" % len(copy_sweep.SWEEP))
+
+    # 5b. v3 change set — PIL data tag, inbox columns, rate formatting
+    html = apply_v3(html)
+    notes.append("v3 change set applied (%d swaps + CSS)" % len(V3_SWEEP))
 
     # 6. the extension block, immediately before the prototype's own boot
     if BOOT_ANCHOR not in html:
