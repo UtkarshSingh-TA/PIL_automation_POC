@@ -72,12 +72,12 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 # --- protected modules: imported, never edited --------------------------------
-from new_main import (
+from main_processing import (
     SequenceSourcingAgent,
     ExcelSequenceRenderer,
     load_config,
 )
-from new_email_extractor import fetch_extracted_email_payloads
+from email_extractor import fetch_extracted_email_payloads
 
 # ==============================================================================
 # copy_sweep — inlined verbatim so this file has no local imports.
