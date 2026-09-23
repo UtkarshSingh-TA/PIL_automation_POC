@@ -1,105 +1,21 @@
-
 import os
 import io
 import re
+import csv
 import email
 from pathlib import Path
 from typing import List, Dict, Tuple
 from email.utils import parsedate_to_datetime
 
-import spacy
 from pypdf import PdfReader
+import pandas as pd
+import docx
 import extract_msg
 from bs4 import BeautifulSoup
 
 
-class LocalNERFilter:
-    """Multilingual Local spaCy NER filter supporting Chinese, German, Spanish, French, Japanese, and English."""
-
-    MULTILINGUAL_KEYWORDS = [
-        # English Freight & Container Jargon
-        "quote", "quotation", "rate", "freight", "price", "pricing", "rfp", "rfq", "cost", "tariff",
-        "shipping", "cargo", "transport", "logistics", "shipment", "carrier", "vessel", "container",
-        "pol", "pod", "por", "fnd", "origin", "destination", "reefer", "20gp", "40gp", "40hc", "20'gp", "40'hc",
-        "20ft", "40ft", "iso tank", "flatrack", "open top", "teu", "cbm", "gw", "gross weight",
-        
-        # High-Priority Subject/Header Markers
-        "exp rate", "imp rate", "export rate", "import rate", "sept rate", "aug rate", "oct rate",
-        "rate inquiry", "rate request", "spot rate", "freight quote",
-        
-        # Spanish Freight Terms & Logistics Notation
-        "cotización", "cotizacion", "cotizar", "tarifa", "flete", "contenedor", "puerto", 
-        "origen", "destino", "embarque", "transporte", "enlatados", "mercaderia", "incoterm",
-        "1x40", "1x20", "2x40", "2x20", "40hc", "20gp", "40'hc", "20'gp", "1x40hc", "1x20gp",
-        
-        # Port & Location Jargon Examples
-        "yangon", "karachi", "pkkhi", "mmrgn", "shanghai", "ningbo", "rotterdam", "hamburg",
-        "manzanillo", "veracruz", "guayaquil", "buenaventura", "callao", "valparaiso",
-        
-        # Chinese (Simplified & Traditional)
-        "报价", "运费", "海运", "箱型", "港口", "目的港", "始发港", "柜型", "集装箱", "运价", "询价", "货代", "船期",
-        
-        # German
-        "angebot", "fracht", "frachtrate", "containertyp", "hafen", "ladehafen", "löschhafen", "versand", "seefracht",
-        
-        # French
-        "devis", "tarif", "fret", "conteneur", "port", "chargement", "déchargement", "expédition",
-        
-        # Japanese
-        "見積", "運賃", "海上運賃", "コンテナ", "船積み", "積港", "揚港"
-    ]
-
-    def __init__(self, model_name: str = "xx_ent_wiki_sm"):
-        """
-        Uses 'xx_ent_wiki_sm' (spaCy's universal multilingual Wikipedia model).
-        Fallback to 'en_core_web_sm' if multilingual model is not installed.
-        """
-        try:
-            print(f"[Local NER Filter] Loading Multilingual spaCy model '{model_name}'...")
-            self.nlp = spacy.load(model_name)
-        except Exception:
-            print(f"[Local NER Warning] '{model_name}' not found. Falling back to 'en_core_web_sm'...")
-            self.nlp = spacy.load("en_core_web_sm")
-
-    def extract_entities(self, text: str) -> Dict[str, List[str]]:
-        doc = self.nlp(text)
-        entities = {"locations": [], "organizations": []}
-
-        for ent in doc.ents:
-            if ent.label_ in ["LOC", "GPE"]:
-                entities["locations"].append(ent.text)
-            elif ent.label_ in ["ORG", "PER"]:
-                entities["organizations"].append(ent.text)
-
-        for key in entities:
-            entities[key] = list(set(entities[key]))
-        return entities
-
-    def is_quotation_relevant(self, subject: str, text: str) -> Tuple[bool, Dict[str, List[str]]]:
-        """
-        Evaluates relevance across subject and combined body content using
-        multilingual keywords, regex equipment patterns, and spaCy entity recognition.
-        """
-        combined_content = f"{subject}\n{text}".lower()
-        entities = self.extract_entities(text)
-        
-        # 1. Broad Multilingual Keyword Check
-        has_keywords = any(kw in combined_content for kw in self.MULTILINGUAL_KEYWORDS)
-        
-        # 2. Regex Pattern Check for Container Specifications (e.g., 1x40, 1x20, 20ft, 40hc, 40'hc)
-        has_container_pattern = bool(re.search(r"\b\d+\s*x\s*\d+\b|\b\d+['']?\s*(hc|gp|rf|ft)\b", combined_content))
-        
-        # 3. Location Entity Check
-        has_locations = len(entities["locations"]) > 0
-
-        # Permissive Pass: Either keywords, container notations, or locations trigger LLM processing
-        is_relevant = has_keywords or has_container_pattern or has_locations
-
-        return is_relevant, entities
-
-
 class FileAttachmentExtractor:
-    """Helper methods to extract text from PDF streams."""
+    """Helper methods to extract text from PDF, Excel, Word, and CSV attachments."""
 
     @staticmethod
     def extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
@@ -112,12 +28,69 @@ class FileAttachmentExtractor:
                     extracted_pages.append(text)
             return "\n".join(extracted_pages)
         except Exception as e:
-            print(f"  └─► [PDF Extractor Warning]: Failed to read PDF: {e}")
+            print(f"  └─► [PDF Extractor Warning]: {e}")
             return ""
+
+    @staticmethod
+    def extract_text_from_excel_bytes(excel_bytes: bytes, filename: str) -> str:
+        try:
+            excel_file = pd.ExcelFile(io.BytesIO(excel_bytes))
+            sheet_texts = []
+            for sheet_name in excel_file.sheet_names:
+                df = pd.read_excel(excel_file, sheet_name=sheet_name)
+                sheet_str = df.to_string(index=False)
+                sheet_texts.append(f"--- Sheet: {sheet_name} ---\n{sheet_str}")
+            return "\n".join(sheet_texts)
+        except Exception as e:
+            print(f"  └─► [Excel Extractor Warning] ({filename}): {e}")
+            return ""
+
+    @staticmethod
+    def extract_text_from_docx_bytes(docx_bytes: bytes, filename: str) -> str:
+        try:
+            doc = docx.Document(io.BytesIO(docx_bytes))
+            full_text = []
+            for para in doc.paragraphs:
+                if para.text.strip():
+                    full_text.append(para.text)
+            for table in doc.tables:
+                for row in table.rows:
+                    row_text = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                    if row_text:
+                        full_text.append(" | ".join(row_text))
+            return "\n".join(full_text)
+        except Exception as e:
+            print(f"  └─► [Word Extractor Warning] ({filename}): {e}")
+            return ""
+
+    @staticmethod
+    def extract_text_from_csv_bytes(csv_bytes: bytes, filename: str) -> str:
+        try:
+            content = csv_bytes.decode("utf-8", errors="ignore")
+            reader = csv.reader(io.StringIO(content))
+            rows = [" | ".join(row) for row in reader if row]
+            return "\n".join(rows)
+        except Exception as e:
+            print(f"  └─► [CSV Extractor Warning] ({filename}): {e}")
+            return ""
+
+    @classmethod
+    def process_attachment(cls, filename: str, file_bytes: bytes) -> str:
+        """Routes attachments to appropriate parser based on file extension."""
+        fname_lower = filename.lower()
+        if fname_lower.endswith(".pdf"):
+            return cls.extract_text_from_pdf_bytes(file_bytes)
+        elif fname_lower.endswith((".xlsx", ".xls")):
+            return cls.extract_text_from_excel_bytes(file_bytes, filename)
+        elif fname_lower.endswith((".docx", ".doc")):
+            return cls.extract_text_from_docx_bytes(file_bytes, filename)
+        elif fname_lower.endswith(".csv"):
+            return cls.extract_text_from_csv_bytes(file_bytes, filename)
+        return ""
 
 
 class OutlookFileParser:
-    """Parses text body, dates, and PDF attachments from both .eml and .msg files."""
+    """Parses text body, dates, and attachments (PDF, Excel, Word, CSV) from .eml and .msg files."""
 
     @staticmethod
     def clean_html_body(raw_text_or_html: str) -> str:
@@ -146,7 +119,6 @@ class OutlookFileParser:
         if not full_text:
             return ""
 
-        # Clean regex pattern matching standard multilingual reply headers
         reply_pattern = r"(?i)(\n-{3,}\s*Original Message\s*-{3,}|\nFrom:\s+|\nDe:\s+|\nEnviado el:\s+|\nVon:\s+)"
         thread_parts = re.split(reply_pattern, full_text)
         
@@ -161,7 +133,7 @@ class OutlookFileParser:
             body = thread_parts[i+1] if i+1 < len(thread_parts) else ""
             reconstructed_messages.append(header + body)
 
-        # Reverse the order: Oldest message (bottom) -> Newest reply (top)
+        # Reverse order: Oldest message (bottom) -> Newest reply (top)
         chronological_thread = list(reversed(reconstructed_messages))
         
         structured_payload = []
@@ -207,13 +179,12 @@ class OutlookFileParser:
                         body_text += payload.decode("utf-8", errors="ignore")
 
                 elif "attachment" in content_disposition and filename:
-                    if filename.lower().endswith(".pdf"):
-                        pdf_bytes = part.get_payload(decode=True)
-                        if pdf_bytes:
-                            pdf_text = FileAttachmentExtractor.extract_text_from_pdf_bytes(pdf_bytes)
-                            if pdf_text.strip():
-                                attachment_texts.append(f"--- ATTACHMENT CONTENT ({filename}) ---\n{pdf_text}")
-                                filenames.append(filename)
+                    file_bytes = part.get_payload(decode=True)
+                    if file_bytes:
+                        extracted_text = FileAttachmentExtractor.process_attachment(filename, file_bytes)
+                        if extracted_text.strip():
+                            attachment_texts.append(f"--- ATTACHMENT CONTENT ({filename}) ---\n{extracted_text}")
+                            filenames.append(filename)
 
             cleaned_body = cls.clean_html_body(body_text)
             chronological_body = cls.split_and_reverse_thread(cleaned_body)
@@ -251,14 +222,13 @@ class OutlookFileParser:
             if hasattr(msg, 'attachments') and msg.attachments:
                 for att in msg.attachments:
                     try:
-                        filename = getattr(att, 'longFilename', None) or getattr(att, 'shortFilename', None) or "attachment.pdf"
-                        if str(filename).lower().endswith(".pdf"):
-                            pdf_bytes = att.data
-                            if pdf_bytes:
-                                pdf_text = FileAttachmentExtractor.extract_text_from_pdf_bytes(pdf_bytes)
-                                if pdf_text.strip():
-                                    attachment_texts.append(f"--- ATTACHMENT CONTENT ({filename}) ---\n{pdf_text}")
-                                    filenames.append(str(filename))
+                        filename = getattr(att, 'longFilename', None) or getattr(att, 'shortFilename', None) or "attachment"
+                        file_bytes = att.data
+                        if file_bytes:
+                            extracted_text = FileAttachmentExtractor.process_attachment(str(filename), file_bytes)
+                            if extracted_text.strip():
+                                attachment_texts.append(f"--- ATTACHMENT CONTENT ({filename}) ---\n{extracted_text}")
+                                filenames.append(str(filename))
                     except Exception as att_err:
                         print(f"  └─► [MSG Attachment Warning] Skipping attachment in {file_path.name}: {att_err}")
 
@@ -275,10 +245,10 @@ class OutlookFileParser:
             return f"Error reading {file_path.name}", "Unknown Sender", "Unknown Date", "", []
 
 
-def fetch_extracted_email_payloads(account_info: dict, config: dict, ner_filter: LocalNERFilter) -> List[Dict]:
+def fetch_extracted_email_payloads(account_info: dict, config: dict) -> List[Dict]:
     """
     Scans directory for ALL .eml and .msg files, cleans text/attachments,
-    runs spaCy pre-filtering, and returns a list of payload objects.
+    and returns 100% of parsed email payloads directly for LLM evaluation.
     """
     inbox_dir = Path(config.get("LOCAL_INBOX_DIR", "./outlook_inbox"))
 
@@ -294,7 +264,7 @@ def fetch_extracted_email_payloads(account_info: dict, config: dict, ner_filter:
         return []
 
     print(f"\n=====================================================================")
-    print(f" [Outlook Extractor] Found {len(sample_files)} sample email file(s) in '{inbox_dir}'")
+    print(f" [Outlook Extractor] Ingesting ALL {len(sample_files)} sample email file(s) for LLM evaluation")
     print(f"=====================================================================")
 
     extracted_payloads = []
@@ -305,12 +275,6 @@ def fetch_extracted_email_payloads(account_info: dict, config: dict, ner_filter:
         elif file_path.suffix.lower() == ".msg":
             subject, sender, msg_date, full_text, filenames = OutlookFileParser.parse_msg_file(file_path)
         else:
-            continue
-
-        is_relevant, ner_entities = ner_filter.is_quotation_relevant(subject, full_text)
-
-        if not is_relevant:
-            print(f"  └─► [Local NER Discard] File '{file_path.name}' contains no logistics entities. Skipped.")
             continue
 
         clean_subject = subject.lower().replace("re:", "").replace("fwd:", "").strip()
@@ -325,8 +289,7 @@ def fetch_extracted_email_payloads(account_info: dict, config: dict, ner_filter:
             "received_date": msg_date,
             "subject": subject,
             "combined_text_payload": full_text,
-            "attached_files": filenames,
-            "local_ner_hints": ner_entities
+            "attached_files": filenames
         })
 
     return extracted_payloads
